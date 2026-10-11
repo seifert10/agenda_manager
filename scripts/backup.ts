@@ -1,0 +1,10 @@
+import { backup } from 'node:sqlite';
+import db, {sqlite} from '../server/db/connection';
+import fs from 'node:fs';
+import path from 'node:path';
+if (!sqlite) throw new Error('Para PostgreSQL, use pg_dump com a conexão direta do Neon. Consulte docs/deploy-render-neon.md.');
+fs.mkdirSync('backups', { recursive: true });
+const target = path.resolve('backups', `folga-${new Date().toISOString().replace(/[:.]/g, '-')}.db`);
+await backup(sqlite, target);
+console.log(`Backup salvo: ${target}`);
+await db.close();

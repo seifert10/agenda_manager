@@ -1,6 +1,8 @@
 # Folga Manager
 
-Deploy no Render com PostgreSQL no Neon: siga [o guia de publicação](docs/deploy-render-neon.md). O Blueprint está em `render.yaml`; variáveis de exemplo em `.env.example`.
+Deploy como projeto novo no Render Free com PostgreSQL no Neon Free: siga [o guia de publicação](docs/deploy-render-neon.md). O Blueprint está em `render.yaml`; variáveis de exemplo em `.env.example`. Inicialize o banco e provisione a empresa antes de iniciar o serviço.
+
+Para preparar a entrega com Node 24: execute `npm ci --include=dev`, depois `npm run check:deploy`. Com as validações aprovadas, `npm run package:deploy` gera `deploy-package.zip` e `deploy-package.sha256` (PowerShell 7). O pacote contém as fontes para o build no Render, sem banco local, backups, `.env` ou `node_modules`. A validação local usa SQLite e PostgreSQL embarcado; a conexão e os papéis do Neon precisam ser conferidos no destino conforme o guia.
 
 > **Controle inteligente de equipe, folgas e escalas para empresas brasileiras**  
 > Interface moderna inspirada no ecossistema macOS, com foco em garantir que nenhum funcionário seja esquecido na programação do Descanso Semanal Remunerado (DSR).
@@ -102,7 +104,7 @@ webapp/
 ## 🚀 Como Instalar e Executar
 
 ### 1. Pré-requisitos
-- Node.js versão 22 ou superior (testado e homologado no Node v25).
+- Node.js série 24, conforme `package.json` e `.node-version`.
 - Gerenciador de pacotes `npm`.
 
 ### 2. Instalação das Dependências
@@ -110,25 +112,13 @@ webapp/
 npm install
 ```
 
-### 3. Criar Banco e Executar Migrações
-```bash
-npm run db:migrate
-```
+### 3. Preparar o banco multiempresa
 
-### 4. Popular com Dados de Demonstração (Seed)
-Popula o banco com 10 colaboradores brasileiros com situações variadas (folga definida, pendência de DSR, férias regulamentares e afastamento):
-```bash
-npm run db:seed
-```
+Siga [operação multiempresa](docs/multiempresa-operacao.md). Use `npm run company:ops` com ação `initialize` em banco vazio ou `migrate` para legado com backup restaurado e destino explícito. Provisionamento de empresa e ADMIN é interno, por stdin; não há criação automática no startup. Use Node 24 conforme package.json.
 
-### 5. Iniciar a Aplicação (Servidor + Cliente)
-Executa o backend Express na porta `3001` e o frontend Vite na porta `5173` de forma unificada:
-```bash
-npm run dev
-```
+### 4. Iniciar a aplicação
 
-Acesse a interface em seu navegador:
-👉 **[http://localhost:5173](http://localhost:5173)**
+`npm run dev` inicia servidor e frontend. Login solicita código da empresa, e-mail e senha. Runtime sobre schema legado é recusado até o corte; não use reset para contornar essa proteção. Para um ensaio sem alterar o banco atual, execute `npm run build` e `npm run test:company-browser`, em http://127.0.0.1:3417.
 
 ---
 
@@ -136,9 +126,12 @@ Acesse a interface em seu navegador:
 
 | Comando | Descrição |
 | :--- | :--- |
-| `npm run db:migrate` | Cria as 6 tabelas e índices no arquivo `data/folga_manager.db` |
-| `npm run db:seed` | Insere os 10 colaboradores e dados de teste |
-| `npm run db:reset` | Limpa e recria todas as tabelas com os dados do seed |
+| `npm run company:ops` | Migração/inicialização e provisionamento internos explícitos, veja o runbook |
+| `npm run db:backup` | Backup físico SQLite; conferir restauração antes do corte |
+| `npm run test:company` | Matriz multiempresa SQLite e sessão frontend |
+| `npm run test:company:postgres` | Matriz no PostgreSQL embarcado com RLS |
+| `npm run test:company:real` | Pool, runtime restrito e dump/restore em cluster local descartável |
+| `npm run db:migrate`, `db:seed`, `db:reset` | Ferramentas legadas para fixtures; não usar em schema 3 |
 
 ---
 

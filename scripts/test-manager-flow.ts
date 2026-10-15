@@ -4,6 +4,8 @@ import db from '../server/db/connection';
 import { runMigrations } from '../server/db/migrate';
 import { runSeed } from '../server/db/seed';
 import { generateFakeValidCPF, isValidCPF } from '../server/utils/cpf';
+import { addDays as addCivilDays } from '../shared/dates';
+import { brazilToday } from '../shared/holidays';
 const SIM_PORT = 4010;
 const GLOBAL_TIMEOUT_MS = 30000;
 const timer = setTimeout(() => {
@@ -146,9 +148,9 @@ async function runManagerSimulation() {
         });
         console.log('\n📌 [Etapa 10/16] Resolvendo pendência agendando folga do colaborador...');
         const targetPending = pendingEmployees[0];
-        const nextSunday = new Date();
-        nextSunday.setDate(nextSunday.getDate() + 4);
-        const nextSundayStr = nextSunday.toISOString().split('T')[0];
+        const existingDaysOff = await fetchJson(`${baseUrl}/days-off?employeeId=${targetPending.id}`);
+        let nextSundayStr = addCivilDays(brazilToday(), 4);
+        while (existingDaysOff.some((off: any) => off.date === nextSundayStr)) nextSundayStr = addCivilDays(nextSundayStr, 1);
         await fetchJson(`${baseUrl}/days-off`, {
             method: 'POST',
             body: JSON.stringify({

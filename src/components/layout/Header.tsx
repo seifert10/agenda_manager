@@ -43,6 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
           <h2 title={title} className="truncate text-sm sm:text-lg font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight">
             {title}
           </h2>
+          <p title={user?.company?.name} className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">{user?.company?.name} · {user?.company?.code}</p>
         </div>
       </div>
 

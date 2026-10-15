@@ -20,8 +20,8 @@ import {
 } from 'lucide-react';
 
 export const SettingsPage: React.FC = () => {
-  const { isAdmin } = useAuth();
-  const [companyName, setCompanyName] = useState('Mercado & Varejo Modelo Ltda');
+  const { isAdmin, user, refreshUser } = useAuth();
+  const [companyName, setCompanyName] = useState(user?.company?.name ?? '');
   const [managerName, setManagerName] = useState('Gestor Operacional');
   const [cltAlertDays, setCltAlertDays] = useState('6');
   const [loading, setLoading] = useState(false);
@@ -48,6 +48,7 @@ export const SettingsPage: React.FC = () => {
         manager_name: managerName,
         clt_alert_days: cltAlertDays,
       });
+      await refreshUser();
       toast.success('Configurações salvas com sucesso!');
     } catch (err: any) {
       toast.error('Erro ao salvar configurações', err.message);

@@ -5,12 +5,14 @@ import { AttentionCardData } from '../../types';
 import { AlertCircle, AlertTriangle, CheckCircle2, ArrowRight, CalendarPlus } from 'lucide-react';
 
 interface AttentionCardProps {
+  readOnly?: boolean;
   data: AttentionCardData;
   onResolvePending: () => void;
   onScheduleDayOff: (employeeId: number) => void;
 }
 
 export const AttentionCard: React.FC<AttentionCardProps> = ({
+  readOnly = false,
   data,
   onResolvePending,
   onScheduleDayOff,
@@ -65,7 +67,7 @@ export const AttentionCard: React.FC<AttentionCardProps> = ({
         </div>
 
         {/* Botão de Resolução Direta */}
-        {!isOk && (
+        {!isOk && !readOnly && (
           <div className="shrink-0 flex items-center">
             <Button
               variant={isCritico ? 'danger' : 'primary'}
@@ -106,7 +108,7 @@ export const AttentionCard: React.FC<AttentionCardProps> = ({
                   </p>
                 </div>
 
-                <Button
+                {!readOnly && <Button
                   variant="subtle"
                   size="sm"
                   onClick={() => onScheduleDayOff(emp.id)}
@@ -114,7 +116,7 @@ export const AttentionCard: React.FC<AttentionCardProps> = ({
                   icon={<CalendarPlus className="w-3.5 h-3.5 text-mac-blue" />}
                 >
                   Definir
-                </Button>
+                </Button>}
               </div>
             ))}
           </div>

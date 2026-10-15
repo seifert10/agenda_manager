@@ -1,135 +1,55 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useSyncExternalStore } from 'react';
 import { User, UserRole } from '../types';
-import { api, getStoredToken, setStoredToken } from '../services/api';
+import { api } from '../services/api';
+import { getSession, subscribeSession, setStoredToken, validateSession } from '../services/session';
 
 interface AuthContextType {
-  user: User | null;
-  token: string | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-  isAdmin: boolean;
-  isManager: boolean;
-  isViewer: boolean;
-  role: UserRole | null;
-  departments: { id: number; name: string }[];
-  departmentScopeText: string;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
+  user: User | null; token: string | null; sessionVersion: number;
+  isLoading: boolean; isAuthenticated: boolean;
+  isAdmin: boolean; isManager: boolean; isViewer: boolean;
+  role: UserRole | null; departments: { id: number; name: string }[]; departmentScopeText: string;
+  login: (companyCode: string, email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>; refreshUser: () => Promise<void>;
 }
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('folga_manager_user');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
-  const [token, setToken] = useState<string | null>(getStoredToken);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-
-  // Validação da sessão no carregamento inicial
+  const session = useSyncExternalStore(subscribeSession, getSession);
+  const [validated, setValidated] = useState<{ revision: number; user: User } | null>(null);
+  const user = session.ready && validated?.revision === session.revision ? validated.user : null;
+  const loadUser = async (revision: number) => {
+    const response = await api.getMe();
+    if (!response.user.company?.id || response.user.companyId !== response.user.company.id) throw new Error('Servidor incompatível com sessões multiempresa.');
+    if (revision !== getSession().revision) return;
+    setValidated({ revision, user: response.user });
+    validateSession(revision);
+  };
   useEffect(() => {
-    async function checkAuth() {
-      const storedToken = getStoredToken();
-      if (!storedToken) {
-        setIsLoading(false);
-        return;
-      }
-
-      try {
-        const res = await api.getMe();
-        setUser(res.user);
-        localStorage.setItem('folga_manager_user', JSON.stringify(res.user));
-      } catch {
-        // Se o token estiver expirado ou inválido, limpa sessão
-        setUser(null);
-        setToken(null);
-        setStoredToken(null);
-        localStorage.removeItem('folga_manager_user');
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    checkAuth();
-
-    // Listener para quando o backend retornar 401 Unauthorized
-    const handleUnauthorized = () => {
-      setUser(null);
-      setToken(null);
-      setStoredToken(null);
-      localStorage.removeItem('folga_manager_user');
-    };
-
-    window.addEventListener('auth:unauthorized', handleUnauthorized);
-    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
-  }, []);
-
-  const login = async (email: string, password: string) => {
-    const res = await api.login(email, password);
-    setStoredToken(res.token);
-    setToken(res.token);
-    setUser(res.user);
-    localStorage.setItem('folga_manager_user', JSON.stringify(res.user));
+    let alive = true;
+    localStorage.removeItem('folga_manager_user');
+    setValidated(null);
+    if (session.token) void loadUser(session.revision).catch(() => {
+      if (alive && session.revision === getSession().revision) setStoredToken(null);
+    });
+    return () => { alive = false; };
+  }, [session.revision, session.token]);
+  const login = async (companyCode: string, email: string, password: string) => {
+    const response = await api.login(companyCode, email, password);
+    if (!response.user.company?.id) throw new Error('Servidor incompatível com sessões multiempresa.');
+    setStoredToken(response.token);
   };
-
-  const logout = async () => {
-    try {
-      await api.logout();
-    } catch {
-      // Ignora erro
-    } finally {
-      setUser(null);
-      setToken(null);
-      setStoredToken(null);
-      localStorage.removeItem('folga_manager_user');
-    }
-  };
-
-  const isAdmin = user?.role === 'ADMIN';
-  const isManager = user?.role === 'MANAGER';
-  const isViewer = user?.role === 'VIEWER';
-  const departments = user?.departments || [];
-
-  const departmentScopeText = isAdmin
-    ? 'Acesso global'
-    : departments.length > 0
-    ? departments.map(d => d.name).join(' · ')
-    : 'Sem setor';
-
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        isLoading,
-        isAuthenticated: !!user && !!token,
-        isAdmin,
-        isManager,
-        isViewer,
-        role: user?.role || null,
-        departments,
-        departmentScopeText,
-        login,
-        logout,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const logout = async () => { try { await api.logout(); } catch { /* Local state already cleared. */ } };
+  const departments = user?.departments ?? [];
+  return <AuthContext.Provider value={{
+    user, token: session.token, sessionVersion: session.revision,
+    isLoading: !!session.token && !user, isAuthenticated: !!user && !!session.token,
+    isAdmin: user?.role === 'ADMIN', isManager: user?.role === 'MANAGER', isViewer: user?.role === 'VIEWER',
+    role: user?.role ?? null, departments,
+    departmentScopeText: user?.role === 'ADMIN' ? 'Todos os setores da empresa' : departments.map(d => d.name).join(' · ') || 'Sem setor',
+    login, logout, refreshUser: () => loadUser(getSession().revision),
+  }}>{children}</AuthContext.Provider>;
 };
-
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth deve ser utilizado dentro de um AuthProvider');
-  }
+  if (!context) throw new Error('useAuth deve ser utilizado dentro de um AuthProvider');
   return context;
 };

@@ -20,6 +20,7 @@ function AppContent() {
   const { isAuthenticated, isLoading, isAdmin, isViewer } = useAuth();
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<number | undefined>();
   const [currentPage, setCurrentPage] = useState<PageId>('dashboard');
+  const [scheduleDate, setScheduleDate] = useState<string | undefined>();
 
   if (isLoading) {
     return (
@@ -59,17 +60,17 @@ function AppContent() {
   return (
     <AppLayout
       currentPage={activePage}
-      onNavigate={(page, params) => { setSelectedEmployeeId(params?.selectedEmployeeId); setCurrentPage(page); }}
+      onNavigate={(page, params) => { setSelectedEmployeeId(params?.selectedEmployeeId); setScheduleDate(params?.date); setCurrentPage(page); }}
       pageTitle={pageTitles[activePage] || 'Folga Manager'}
     >
       {activePage === 'dashboard' ? (
-        <DashboardPage onNavigate={(page: PageId) => setCurrentPage(page)} />
+        <DashboardPage onNavigate={(page: PageId, params?: { date?: string }) => { setScheduleDate(params?.date); setCurrentPage(page); }} />
       ) : activePage === 'employees' ? (
         <EmployeesPage key={selectedEmployeeId ?? 'list'} initialSelectedId={selectedEmployeeId} />
       ) : activePage === 'planner' ? (
         <DaysOffPlannerPage />
       ) : activePage === 'schedule' ? (
-        <SchedulePage />
+        <SchedulePage key={scheduleDate ?? 'current'} initialDate={scheduleDate} />
       ) : activePage === 'reports' ? (
         <ReportsPage />
       ) : activePage === 'history' ? (
@@ -87,14 +88,17 @@ function AppContent() {
   );
 }
 
+function SessionContent() {
+  const { sessionVersion } = useAuth();
+  return <ToastProvider key={sessionVersion}><AppContent /></ToastProvider>;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
-      <ToastProvider>
-        <AuthProvider>
-          <AppContent />
-        </AuthProvider>
-      </ToastProvider>
+      <AuthProvider>
+        <SessionContent />
+      </AuthProvider>
     </ThemeProvider>
   );
 }

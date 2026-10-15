@@ -16,7 +16,11 @@ export interface Department {
   employee_count?: number;
 }
 
+export interface Company { id: number; code: string; name: string; }
+
 export interface User {
+  companyId?: number;
+  company?: Company;
   id: number;
   name: string;
   email: string;

@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import {
@@ -16,20 +18,25 @@ interface OnboardingModalProps {
 }
 
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onFinish }) => {
+  const { isAdmin } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [step, setStep] = useState(1);
 
   useEffect(() => {
-    const completed = localStorage.getItem('folga_onboarding_completed');
-    if (!completed) {
-      setIsOpen(true);
-    }
-  }, []);
+    if (!isAdmin) return;
+    let active = true;
+    api.getSettings().then(settings => {
+      if (active && settings.onboarding_completed !== 'true') setIsOpen(true);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [isAdmin]);
 
-  const handleComplete = () => {
-    localStorage.setItem('folga_onboarding_completed', 'true');
-    setIsOpen(false);
-    if (onFinish) onFinish();
+  const handleComplete = async () => {
+    try {
+      await api.updateSettings({ onboarding_completed: 'true' });
+      setIsOpen(false);
+      onFinish?.();
+    } catch { /* Keep onboarding open when persistence fails. */ }
   };
 
   const steps = [

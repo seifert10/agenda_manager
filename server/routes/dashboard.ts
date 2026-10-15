@@ -1,5 +1,6 @@
 import { dayType } from '../../shared/schedule';
 import { validDate, addDays } from '../../shared/dates';
+import { brazilToday } from '../../shared/holidays';
 import { notificationsFor } from '../services/notifications';
 import { Router } from 'express';
 import db from '../db/connection';
@@ -10,7 +11,7 @@ router.use(requireAuth);
 router.get('/', async (req: AuthRequest, res) => {
     try {
         const user = req.user!;
-        const todayStr = (req.query.date as string) || formatYMD(new Date());
+        const todayStr = (req.query.date as string) || brazilToday();
         if (!validDate(todayStr))
             return res.status(400).json({ error: 'Data inválida.' });
         // 1. Busca colaboradores respeitando o escopo do usuário

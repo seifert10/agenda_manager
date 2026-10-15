@@ -1,14 +1,13 @@
-import app from './app';
-import { runMigrations } from './db/migrate';
+import { createCompanyApplication } from './company-app';
 import db, {dialect} from './db/connection';
-import {bootstrapProduction} from './db/bootstrap';
-const PORT = Number(process.env.PORT) || 3001;
-// Garante migrações ao iniciar
-await runMigrations();
-await bootstrapProduction();
+const PORT = Number(process.env.PORT ?? 3001);
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error('Porta inválida.');
+// Runtime never receives owner credentials, migrates or provisions accounts.
+const app = await createCompanyApplication();
 export const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Folga Manager Server rodando na porta ${PORT}`);
-    console.log(`📡 Endpoints disponíveis em http://localhost:${PORT}/api`);
+    const boundPort=(server.address() as {port:number}).port;
+    console.log(`🚀 Folga Manager Server rodando na porta ${boundPort}`);
+    console.log(`📡 Endpoints disponíveis em http://localhost:${boundPort}/api`);
     console.log(`Banco selecionado: ${dialect}`);
 });
 let stopping=false;

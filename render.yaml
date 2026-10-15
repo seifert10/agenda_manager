@@ -11,11 +11,9 @@ services:
         value: production
       - key: TZ
         value: America/Sao_Paulo
+      - key: DB_POOL_MAX
+        value: "5"
       - key: DATABASE_URL
         sync: false
-      - key: INITIAL_ADMIN_NAME
-        value: Administrador
-      - key: INITIAL_ADMIN_EMAIL
-        sync: false
-      - key: INITIAL_ADMIN_PASSWORD
+      - key: COMPANY_AUTH_RESOLVER_ROLE
         sync: false

@@ -14,6 +14,7 @@ import auditRouter from './routes/audit';
 import reportsRouter from './routes/reports';
 import notificationsRouter from './routes/notifications';
 import settingsRouter from './routes/settings';
+import holidaysRouter from './routes/holidays';
 export const app = express();
 app.disable('x-powered-by');
 if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
@@ -44,6 +45,7 @@ app.use('/api/audit', auditRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/holidays', holidaysRouter);
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 if (process.env.NODE_ENV === 'production') {
     app.use(express.static(path.resolve('dist')));

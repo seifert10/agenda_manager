@@ -11,6 +11,8 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { PageId } from '../components/layout/Sidebar';
 import { Sparkles, Calendar, ArrowRight } from 'lucide-react';
+import HolidaysCard from '../components/dashboard/HolidaysCard';
+import { brazilToday, HolidaySummary } from '../../shared/holidays';
 
 interface DashboardPageProps {
   onNavigate: (page: PageId, params?: any) => void;
@@ -20,6 +22,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   const { user, isViewer } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [holidays, setHolidays] = useState<HolidaySummary | null>(null);
+  const [holidayError, setHolidayError] = useState(false);
 
   // Modal de folga rápida ao clicar em um dia da semana
   const [folgaModalOpen, setFolgaModalOpen] = useState(false);
@@ -34,8 +38,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const res = await api.getDashboard();
+      const [res, holidayResult] = await Promise.all([api.getDashboard(), api.getHolidaySummary().then(value => ({ value, failed: false })).catch(() => ({ value: null, failed: true }))]);
       setData(res);
+      setHolidays(holidayResult.value);
+      setHolidayError(holidayResult.failed);
     } catch (err: any) {
       console.error(err);
       toast.error('Erro ao carregar dados do dashboard', err.message);
@@ -49,9 +55,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
     const handleUpdate = () => loadDashboard();
     window.addEventListener('folga-updated', handleUpdate);
     window.addEventListener('employee-updated', handleUpdate);
+    const refresh = window.setInterval(loadDashboard, 60000);
     return () => {
       window.removeEventListener('folga-updated', handleUpdate);
       window.removeEventListener('employee-updated', handleUpdate);
+      window.clearInterval(refresh);
     };
   }, [loadDashboard]);
 
@@ -64,7 +72,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
   };
 
   const getFormattedCurrentDate = () => {
-    const now = new Date();
+    const now = new Date(brazilToday() + 'T12:00:00');
     return now.toLocaleDateString('pt-BR', {
       weekday: 'long',
       day: 'numeric',
@@ -141,6 +149,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
 
       {/* CARD PRIORITÁRIO NÚMERO 1: Atenção do Gestor */}
       <AttentionCard
+        readOnly={isViewer}
         data={data.attentionCard}
         onResolvePending={() => onNavigate('planner')}
         onScheduleDayOff={(empId) => {
@@ -150,6 +159,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
           setFolgaModalOpen(true);
         }}
       />
+
+      {holidays && <HolidaysCard summary={holidays} onViewDate={date => onNavigate('schedule', { date })} />}
+      {holidayError && <p role="alert" className="text-xs text-red-600 dark:text-red-400">Não foi possível carregar os feriados. <button type="button" className="underline" onClick={loadDashboard}>Tentar novamente</button></p>}
 
       {/* 4 Cards de Estatísticas Rápidas */}
       <StatCards
@@ -162,8 +174,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <WeekCalendarCard
+            readOnly={isViewer}
             weekDays={data.weekDays}
             weekGrid={data.weekGrid}
+            holidays={holidays?.week}
             onSelectEmployeeDay={handleSelectEmployeeDay}
             onNavigateToSchedule={() => onNavigate('schedule')}
           />

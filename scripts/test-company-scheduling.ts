@@ -1,0 +1,218 @@
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import db,{dialect} from '../server/db/connection';
+import { runMigrations } from '../server/db/migrate';
+import { runSeed } from '../server/db/seed';
+import { upgradeCompanySchema } from '../server/db/upgrade-company';
+import { companyPolicies } from '../server/db/company-schema';
+import { companyAuthSchema,companyAuthGrants } from '../server/db/company-auth-schema';
+import { companyRuntimeGrants } from '../server/db/company-runtime-grants';
+import { companyAuthentication } from '../server/services/companyAuth';
+import { companyAuthStore } from '../server/db/company-auth-store';
+import { createCompanyApplication } from '../server/company-app';
+import { hashPassword } from '../server/utils/auth';
+import { recurrenceDates } from '../shared/recurrence';
+import { companyEmployeeStatus } from '../server/services/companyEmployees';
+import { companyEmployee } from '../server/services/companyAuthorization';
+import { companyNotificationsFor } from '../server/services/companyNotifications';
+
+await runMigrations();await runSeed();
+await upgradeCompanySchema({code:'demo',name:'Demo'},{backupVerified:true});
+await db.prepare("INSERT INTO companies(code,name) VALUES('second','Second')").run();
+const otherUser=Number((await db.prepare("INSERT INTO users(company_id,name,email,password_hash,role) VALUES(2,'Admin B','admin@folgamanager.local',?,'ADMIN')").run(hashPassword('OtherPassword123!'))).lastInsertRowid);
+const otherDept=Number((await db.prepare("INSERT INTO departments(company_id,name) VALUES(2,'cozinha')").run()).lastInsertRowid);
+await db.prepare("INSERT INTO users(company_id,name,email,password_hash,role) VALUES(2,'No sector','empty@example.test',?,'MANAGER')").run(hashPassword('OtherPassword123!'));
+const emp=await db.prepare('SELECT * FROM employees WHERE company_id=1 AND department_id=1 ORDER BY id LIMIT 1').get();
+const otherEmp=Number((await db.prepare('INSERT INTO employees(company_id,name,cpf,position,department,department_id,hire_date) VALUES(2,?,?,?,?,?,?)').run('Exclusive B',emp.cpf,'Cook','cozinha',otherDept,'2020-01-01')).lastInsertRowid);
+const localOther=await db.prepare('SELECT id FROM employees WHERE company_id=1 AND department_id=2 ORDER BY id LIMIT 1').get();
+await db.prepare("INSERT INTO settings(company_id,key,value) VALUES(2,'clt_alert_days','3')").run();
+if(dialect==='postgres') {
+  await db.exec(companyPolicies());await db.exec(companyAuthSchema);
+  await db.exec('CREATE ROLE company_auth_resolver; CREATE ROLE company_runtime;');
+  await db.exec(companyAuthGrants('company_runtime','company_auth_resolver'));await db.exec(companyRuntimeGrants('company_runtime'));await db.exec('SET ROLE company_runtime');
+}
+const auth=companyAuthentication(companyAuthStore);
+const a=await auth.login('demo','admin@folgamanager.local','AdminPassword123!');
+const b=await auth.login('second','admin@folgamanager.local','OtherPassword123!');
+assert.equal(b.user.id,otherUser);
+const manager=await auth.login('demo','cozinha@folgamanager.local','CozinhaPassword123!');
+const viewer=await auth.login('demo','visualizacao@folgamanager.local','ViewerPassword123!');
+const noSector=await auth.login('second','empty@example.test','OtherPassword123!');
+const app=await createCompanyApplication({resolverRole:'company_auth_resolver'});
+const server=http.createServer(app);await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+const base=`http://127.0.0.1:${(server.address() as {port:number}).port}/api`;
+try {
+  const request=async(token:string,path:string,method='GET',body?:unknown)=>{
+    const response=await fetch(base+path,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(10000)});
+    return {status:response.status,body:await response.json() as any};
+  };
+  const count=async(token:string)=>auth.authenticate(token,async()=>{
+    const companyId=token===a.token?1:2;
+    const offs=await db.prepare('SELECT COUNT(*) AS n FROM days_off WHERE company_id=?').get(companyId);
+    const schedules=await db.prepare('SELECT COUNT(*) AS n FROM work_schedules WHERE company_id=?').get(companyId);
+    const audits=await db.prepare('SELECT COUNT(*) AS n FROM audit_logs WHERE company_id=?').get(companyId);
+    return {offs:offs.n,schedules:schedules.n,audits:audits.n};
+  });
+  assert.equal((await request('invalid','/days-off')).status,401);
+  const health=await fetch(base+'/health');assert.equal(health.status,200);assert.ok(!JSON.stringify(await health.json()).includes('company'));
+  const me=await request(b.token,'/auth/me');assert.equal(me.body.user.company.code,'second');
+  const offA=await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-01-01'});
+  const offB=await request(b.token,'/days-off','POST',{employee_id:otherEmp,date:'2030-01-01'});
+  assert.equal(offA.status,201);assert.equal(offB.status,201);
+  assert.equal((await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-01-01'})).status,400);
+  assert.equal((await request(a.token,'/schedules','POST',{employee_id:emp.id,date:'2030-01-01'})).status,409);
+  assert.equal((await request(a.token,'/schedules','POST',{employee_id:emp.id,date:'2030-01-02',shift:'manha'})).status,200);
+  assert.equal((await request(b.token,'/schedules','POST',{employee_id:otherEmp,date:'2030-01-02',shift:'noite'})).status,200);
+  const listA=await request(a.token,'/days-off?month=2030-01');const listB=await request(b.token,'/days-off?month=2030-01');
+  assert.deepEqual(listA.body.map((row:any)=>row.id),[offA.body.id]);assert.deepEqual(listB.body.map((row:any)=>row.id),[offB.body.id]);
+  assert.ok(!JSON.stringify(listA).includes('Exclusive B'));
+  const schedulesA=await request(a.token,'/schedules?startDate=2030-01-01&endDate=2030-01-31');
+  const schedulesB=await request(b.token,'/schedules?startDate=2030-01-01&endDate=2030-01-31');
+  assert.equal(schedulesA.body.length,1);assert.equal(schedulesB.body.length,1);assert.ok(!JSON.stringify(schedulesA).includes('Exclusive B'));
+  for(const method of ['PUT','DELETE']) {
+    const outside=await request(a.token,`/days-off/${offB.body.id}`,method,method==='PUT'?{date:'2030-01-03'}:undefined);
+    const absent=await request(a.token,'/days-off/999999',method,method==='PUT'?{date:'2030-01-03'}:undefined);
+    assert.deepEqual(outside,absent);assert.equal(outside.status,404);
+  }
+  assert.deepEqual(await request(a.token,`/schedules/${schedulesB.body[0].id}`,'DELETE'),await request(a.token,'/schedules/999999','DELETE'));
+  for(const path of ['/days-off','/schedules']) {
+    assert.equal((await request(a.token,path,'POST',{employee_id:otherEmp,date:'2030-01-04'})).status,404);
+    assert.equal((await request(manager.token,path,'POST',{employee_id:localOther.id,date:'2030-01-04'})).status,403);
+    assert.equal((await request(viewer.token,path,'POST',{employee_id:emp.id,date:'2030-01-04'})).status,403);
+    assert.equal((await request(a.token,`${path}?employeeId=${otherEmp}`)).status,404);
+  }
+  assert.equal((await request(a.token,'/days-off?month=2030-13')).status,400);
+  assert.equal((await request(a.token,'/schedules?startDate=invalid')).status,400);
+  assert.equal((await request(a.token,'/schedules?startDate=2030-02-01&endDate=2030-01-01')).status,400);
+  assert.equal((await request(a.token,`/days-off/${offA.body.id}`,'PUT',{employee_id:otherEmp})).status,400);
+  const before=await count(a.token),beforeB=await count(b.token);
+  const reportA=await request(a.token,'/reports/summary'),reportB=await request(b.token,'/reports/summary');
+  assert.equal(reportA.body.totalEmployees,10);assert.equal(reportB.body.totalEmployees,1);
+  assert.equal(reportA.body.totalDaysOff,before.offs);assert.equal(reportB.body.totalDaysOff,1);
+  assert.equal(reportB.body.departmentSummary.cozinha.daysOffCount,1);
+  assert.equal(Object.values(reportA.body.departmentSummary).reduce((sum:number,department:any)=>sum+department.daysOffCount,0),before.offs);
+  const auditA=await request(a.token,'/audit'),auditB=await request(b.token,'/audit');
+  assert.ok(auditA.body.every((row:any)=>row.company_id===1));assert.ok(auditB.body.every((row:any)=>row.company_id===2));
+  assert.equal((await request(a.token,`/audit?employeeId=${otherEmp}`)).status,404);
+  assert.equal((await request(manager.token,`/audit?employeeId=${localOther.id}`)).status,403);
+  const managerAudit=await request(manager.token,'/audit');assert.ok(managerAudit.body.every((row:any)=>row.department_id===1));
+  assert.equal((await request(a.token,'/audit?limit=501')).status,400);
+  const download=async(token:string,path:string)=>{
+    const response=await fetch(base+path,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(10000)});
+    return {status:response.status,text:await response.text(),type:response.headers.get('content-type'),disposition:response.headers.get('content-disposition'),cache:response.headers.get('cache-control')};
+  };
+  for(const type of ['folgas','pendencias','auditoria']) {
+    const csvA=await download(a.token,`/reports/export-csv?type=${type}`),csvB=await download(b.token,`/reports/export-csv?type=${type}`);
+    assert.equal(csvA.status,200);assert.equal(csvB.status,200);assert.ok(csvA.type?.startsWith('text/csv'));assert.ok(csvA.disposition?.includes('attachment'));assert.equal(csvA.cache,'no-store');
+    assert.ok(!csvA.text.includes('Exclusive B'));assert.ok(!csvB.text.includes(emp.name));
+  }
+  assert.equal((await download(manager.token,'/reports/export-csv?department=salão')).status,403);
+  assert.equal((await download(a.token,'/reports/export-csv?department=missing')).status,404);
+  assert.equal((await download(a.token,'/reports/export-csv?startDate=invalid')).status,400);
+  const publicA=await request(a.token,'/holidays?startDate=2030-01-01&endDate=2030-01-31'),publicB=await request(b.token,'/holidays?startDate=2030-01-01&endDate=2030-01-31');
+  assert.deepEqual(publicA,publicB);
+  const holidayA=await request(a.token,'/holidays/summary?date=2030-01-01'),holidayB=await request(b.token,'/holidays/summary?date=2030-01-01');
+  assert.equal(holidayB.body.today[0].off,1);assert.equal(holidayB.body.today[0].working,0);
+  const sumCoverage=(row:any)=>row.working+row.off+row.unavailable+row.undefined;
+  assert.ok(holidayA.body.month.every((row:any)=>sumCoverage(row)===10));assert.ok(holidayB.body.month.every((row:any)=>sumCoverage(row)===1));
+  const managerHoliday=await request(manager.token,'/holidays/summary?date=2030-01-01');assert.ok(managerHoliday.body.month.every((row:any)=>sumCoverage(row)===3));
+  assert.equal((await request(a.token,'/holidays/summary?date=invalid')).status,400);
+  assert.equal((await request(a.token,'/days-off/batch','POST',{items:[{employee_id:emp.id,date:'2030-02-01'},{employee_id:otherEmp,date:'2030-02-02'}]})).status,404);
+  assert.deepEqual(await count(a.token),before);assert.deepEqual(await count(b.token),beforeB);
+  assert.equal((await request(a.token,'/days-off/batch','POST',{items:[{employee_id:emp.id,date:'2030-02-01'},{employee_id:emp.id,date:'2030-01-01'}]})).status,400);
+  assert.deepEqual(await count(a.token),before);
+  assert.equal((await request(a.token,'/days-off/batch','POST',{items:[{employee_id:emp.id,date:'2030-02-01',company_id:2}]})).status,400);
+  assert.equal((await request(a.token,'/days-off/batch','POST',{items:[{employee_id:emp.id,date:'2030-02-01'},{employee_id:localOther.id,date:'2030-02-02'}]})).body.insertedCount,2);
+  const raceBefore=await count(a.token);
+  const races=await Promise.all([1,2].map(()=>request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-03-01'})));
+  assert.deepEqual(races.map(result=>result.status).sort(),[201,400]);
+  const raceAfter=await count(a.token);assert.equal(raceAfter.offs,raceBefore.offs+1);assert.equal(raceAfter.audits,raceBefore.audits+1);
+  const rule={weekly:true,sundays:[1,3],until:'2030-04-30'},dates=recurrenceDates('2030-04-01',rule);
+  const skipped=dates[1],existingDate=dates[2];
+  assert.equal((await request(a.token,'/schedules','POST',{employee_id:emp.id,date:skipped})).status,200);
+  assert.equal((await request(a.token,'/days-off','POST',{employee_id:emp.id,date:existingDate,status:'realizada',notes:'Preservar'})).status,201);
+  const recurring=await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-04-01',status:'realizada',recurrence:rule});
+  assert.equal(recurring.status,201);assert.deepEqual(recurring.body.skippedDates,[skipped,existingDate]);assert.deepEqual(recurring.body.insertedDates,dates.filter(date=>date!==skipped && date!==existingDate));
+  const april=await request(a.token,`/days-off?month=2030-04&employeeId=${emp.id}`);
+  assert.equal(april.body.find((row:any)=>row.date===existingDate).notes,'Preservar');
+  assert.ok(april.body.every((row:any)=>row.status===(['2030-04-01',existingDate].includes(row.date)?'realizada':'planejada')));
+  const repeat=await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-04-01',recurrence:rule});
+  assert.equal(repeat.body.insertedCount,0);assert.deepEqual(repeat.body.skippedDates,dates);
+  const edit=await request(a.token,`/days-off/${offA.body.id}`,'PUT',{date:'2030-05-01',recurrence:{weekly:true,sundays:[],until:'2030-05-15'}});
+  assert.equal(edit.status,200);assert.deepEqual(edit.body.insertedDates,['2030-05-08','2030-05-15']);assert.deepEqual(edit.body.skippedDates,['2030-05-01']);
+  const beforeInvalid=await count(a.token);
+  assert.equal((await request(a.token,`/days-off/${offA.body.id}`,'PUT',{date:'2030-05-02',recurrence:{weekly:true,sundays:[6],until:'2030-05-15'}})).status,400);
+  assert.deepEqual(await count(a.token),beforeInvalid);
+  assert.equal((await request(a.token,`/days-off?employeeId=${emp.id}&month=2030-05`)).body.find((row:any)=>row.id===offA.body.id).date,'2030-05-01');
+  const sundayRule={weekly:false,sundays:[1,3,5],until:'2030-08-31'};
+  const sundays=await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-07-01',recurrence:sundayRule});
+  assert.equal(sundays.status,201);assert.deepEqual(sundays.body.insertedDates,recurrenceDates('2030-07-01',sundayRule));
+  const beforeFailure=await count(a.token);
+  if(dialect==='sqlite') await db.exec("CREATE TRIGGER reject_scheduling_audit BEFORE INSERT ON audit_logs WHEN NEW.new_value LIKE '%2030-06-08%' BEGIN SELECT RAISE(ABORT,'test audit failure'); END;");
+  else await db.exec(`RESET ROLE;
+    CREATE FUNCTION reject_scheduling_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.new_value LIKE '%2030-06-08%' THEN RAISE EXCEPTION 'test audit failure'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER reject_scheduling_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_scheduling_audit(); SET ROLE company_runtime;`);
+  assert.equal((await request(a.token,'/days-off','POST',{employee_id:emp.id,date:'2030-06-01',recurrence:{weekly:true,sundays:[],until:'2030-06-15'}})).status,500);
+  assert.deepEqual(await count(a.token),beforeFailure);
+  assert.equal((await request(a.token,'/schedules','POST',{employee_id:emp.id,date:'2030-06-08'})).status,500);
+  assert.deepEqual(await count(a.token),beforeFailure);
+  if(dialect==='sqlite') await db.exec('DROP TRIGGER reject_scheduling_audit');
+  else await db.exec('RESET ROLE; DROP TRIGGER reject_scheduling_audit ON audit_logs; DROP FUNCTION reject_scheduling_audit(); SET ROLE company_runtime;');
+  assert.equal((await request(a.token,`/schedules/${schedulesA.body[0].id}`,'DELETE')).status,200);
+  assert.equal((await request(a.token,`/days-off/${offA.body.id}`,'DELETE')).status,200);
+  assert.deepEqual(await count(b.token),beforeB);
+  await auth.authenticate(a.token,async user=>{
+    const calc=await companyEmployeeStatus(user,await companyEmployee(user,emp.id),'2030-01-02');
+    assert.equal(calc.employeeId,emp.id);assert.equal(calc.isOffToday,false);
+  });
+  const dashboardA=await request(a.token,'/dashboard?date=2030-01-01'),dashboardB=await request(b.token,'/dashboard?date=2030-01-01');
+  assert.equal(dashboardA.status,200);assert.equal(dashboardB.status,200);
+  assert.equal(dashboardA.body.stats.totalEmployees,10);assert.equal(dashboardB.body.stats.totalEmployees,1);
+  assert.ok(!JSON.stringify(dashboardA).includes('Exclusive B'));assert.ok(!JSON.stringify(dashboardB).includes(emp.name));
+  assert.ok(dashboardB.body.weekGrid.every((row:any)=>row.employeeId===otherEmp));
+  const managerDashboard=await request(manager.token,'/dashboard');assert.equal(managerDashboard.body.stats.totalEmployees,3);
+  assert.ok(managerDashboard.body.weekGrid.every((row:any)=>row.department==='cozinha'));
+  assert.equal((await request(noSector.token,'/dashboard')).body.stats.totalEmployees,0);
+  assert.equal((await request(noSector.token,'/reports/summary')).body.totalDaysOff,0);
+  assert.deepEqual((await request(noSector.token,'/notifications')).body,{notifications:[],unreadCount:0});
+  assert.equal((await download(noSector.token,'/reports/export-csv')).status,403);
+  const emptyCoverage=await request(noSector.token,'/holidays/summary?date=2030-01-01');assert.ok(emptyCoverage.body.month.every((row:any)=>sumCoverage(row)===0));
+  // Same national holiday key in both companies must have separate IDs and read receipts.
+  const noticesA=await auth.authenticate(a.token,user=>companyNotificationsFor(user,'2030-01-01'));
+  const noticesB=await auth.authenticate(b.token,user=>companyNotificationsFor(user,'2030-01-01'));
+  const holidayNoticeA=noticesA.find(row=>row.source_key==='holiday:2030-01-01:today')!,holidayNoticeB=noticesB.find(row=>row.source_key==='holiday:2030-01-01:today')!;
+  assert.ok(holidayNoticeA);assert.ok(holidayNoticeB);assert.notEqual(holidayNoticeA.id,holidayNoticeB.id);
+  assert.deepEqual(await request(a.token,`/notifications/${holidayNoticeB.id}/read`,'PUT',{}),await request(a.token,'/notifications/999999/read','PUT',{}));
+  assert.equal((await request(a.token,`/notifications/${holidayNoticeB.id}/read`,'PUT',{})).status,404);
+  assert.equal((await request(a.token,`/notifications/${holidayNoticeA.id}/read`,'PUT',{})).status,200);
+  assert.equal((await request(noSector.token,`/notifications/${holidayNoticeB.id}/read`,'PUT',{})).status,403);
+  const readA=await auth.authenticate(a.token,user=>companyNotificationsFor(user,'2030-01-01')),unreadB=await auth.authenticate(b.token,user=>companyNotificationsFor(user,'2030-01-01'));
+  assert.equal(readA.find(row=>row.id===holidayNoticeA.id).is_read,1);assert.equal(unreadB.find(row=>row.id===holidayNoticeB.id).is_read,0);
+  const managerNotices=await auth.authenticate(manager.token,user=>companyNotificationsFor(user,'2030-01-01'));
+  assert.equal(managerNotices.find(row=>row.id===holidayNoticeA.id).is_read,0);
+  const outsideSector=noticesA.find(row=>row.department_id===2)!;assert.ok(outsideSector);
+  assert.equal((await request(manager.token,`/notifications/${outsideSector.id}/read`,'PUT',{})).status,403);
+  assert.equal((await request(manager.token,'/notifications/read-all','PUT',{})).status,200);
+  await auth.authenticate(manager.token,async user=>{
+    const receipts=await db.prepare('SELECT n.department_id FROM notification_reads r JOIN notifications n ON n.company_id=r.company_id AND n.id=r.notification_id WHERE r.company_id=1 AND r.user_id=?').all(user.id);
+    assert.ok(receipts.length);assert.ok(receipts.every(row=>row.department_id===null || row.department_id===1));
+  });
+  assert.equal((await request(a.token,'/notifications/read-all','PUT',{})).status,200);
+  await auth.authenticate(b.token,async user=>{
+    assert.equal((await db.prepare('SELECT * FROM notification_reads WHERE company_id=2 AND user_id=?').all(user.id)).length,0);
+  });
+  const label=async(token:string,id:number)=>{
+    let result='';
+    await assert.rejects(auth.authenticate(token,async user=>{
+      const companyId=user.companyId;
+      await db.prepare("UPDATE employees SET hire_date='2030-01-01',work_schedule_type='6x1',weekly_work_days='[]' WHERE company_id=? AND id=?").run(companyId,id);
+      await db.prepare('DELETE FROM days_off WHERE company_id=? AND employee_id=?').run(companyId,id);
+      await db.prepare('DELETE FROM work_schedules WHERE company_id=? AND employee_id=?').run(companyId,id);
+      result=(await companyEmployeeStatus(user,await companyEmployee(user,id),'2030-01-03')).statusLabel;
+      throw new Error('Rollback of temporary fixture changes');
+    }));
+    return result;
+  };
+  assert.equal(await label(a.token,emp.id),'Folga não definida');assert.equal(await label(b.token,otherEmp),'Programe o descanso');
+} finally {await new Promise<void>(resolve=>server.close(()=>resolve()));await db.close();}
+console.log(`${dialect}: agendamentos, lotes/recorrências atômicos, dashboard, relatórios/CSV, auditoria, cobertura de feriados, alertas locais e leitura pessoal de notificações aprovados.`);

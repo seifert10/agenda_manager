@@ -3,17 +3,23 @@ import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import { WeekDayInfo, WeekGridRow } from '../../types';
 import { Calendar, ChevronRight } from 'lucide-react';
+import { Holiday } from '../../../shared/holidays';
+import HolidayLabel, { holidayHeaderClass } from '../calendar/HolidayLabel';
 
 interface WeekCalendarCardProps {
+  readOnly?: boolean;
   weekDays: WeekDayInfo[];
   weekGrid: WeekGridRow[];
+  holidays?: Holiday[];
   onSelectEmployeeDay: (employeeId: number, dateStr: string, currentDayOffId: number | null) => void;
   onNavigateToSchedule: () => void;
 }
 
 export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
+  readOnly = false,
   weekDays,
   weekGrid,
+  holidays = [],
   onSelectEmployeeDay,
   onNavigateToSchedule,
 }) => {
@@ -59,7 +65,7 @@ export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
               Folgas e Escala da Semana
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Visão de Segunda a Domingo. Clique em qualquer dia para alterar ou agendar folga.
+              {readOnly ? 'Visão de Segunda a Domingo. Consulta da escala da empresa.' : 'Visão de Segunda a Domingo. Clique em qualquer dia para alterar ou agendar folga.'}
             </p>
           </div>
         </div>
@@ -85,7 +91,7 @@ export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
               {weekDays.map(wd => (
                 <th
                   key={wd.dateStr}
-                  className={`pb-3 text-center text-xs font-semibold ${
+                  className={`pb-3 text-center text-xs font-semibold ${holidays.some(h => h.date === wd.dateStr) ? holidayHeaderClass : ''} ${
                     wd.isToday
                       ? 'text-mac-blue font-bold'
                       : 'text-zinc-500 dark:text-zinc-400'
@@ -104,6 +110,7 @@ export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
                     >
                       {wd.label}
                     </span>
+                    <HolidayLabel holiday={holidays.find(h => h.date === wd.dateStr)} />
                   </div>
                 </th>
               ))}
@@ -140,9 +147,10 @@ export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
                   <td key={d.dateStr} className="py-2.5 px-1 text-center">
                     <button
                       type="button"
+                      disabled={readOnly}
                       onClick={() => onSelectEmployeeDay(row.employeeId, d.dateStr, d.dayOffId)}
                       className="w-full cursor-pointer hover:scale-105 active:scale-95 transition-transform"
-                      title={`${row.name} em ${d.dateStr}: ${d.detail} (Clique para alterar)`}
+                      title={`${row.name} em ${d.dateStr}: ${d.detail}${readOnly ? '' : ' (Clique para alterar)'}`}
                     >
                       {getCellBadge(d.type, d.detail)}
                     </button>
@@ -157,6 +165,7 @@ export const WeekCalendarCard: React.FC<WeekCalendarCardProps> = ({
       {/* Legenda de Cores Discretas */}
       <div className="mt-4 pt-3 border-t border-black/[0.04] dark:border-white/[0.06] flex flex-wrap items-center gap-4 text-[11px] text-zinc-500 dark:text-zinc-400">
         <span className="font-semibold text-zinc-600 dark:text-zinc-300">Legenda:</span>
+        <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-violet-300" />Feriado / data de referência</span>
         <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
           <span>Folga / DSR</span>

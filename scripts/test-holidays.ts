@@ -1,0 +1,98 @@
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createElement } from 'react';
+import { brazilToday, easterDate, holidaysForYear, holidaysBetween, holidaySummaryDates, holidayNoticeCandidates } from '../shared/holidays';
+import { dayType } from '../shared/schedule';
+import HolidayLabel from '../src/components/calendar/HolidayLabel';
+import WeekCalendarCard from '../src/components/dashboard/WeekCalendarCard';
+import app from '../server/app';
+import db from '../server/db/connection';
+import { runMigrations } from '../server/db/migrate';
+import { runSeed } from '../server/db/seed';
+import { notificationsFor } from '../server/services/notifications';
+import { holidaySummaryFor } from '../server/services/holidays';
+import type { AuthenticatedUser } from '../server/middlewares/auth';
+
+assert.equal(easterDate(2026), '2026-04-05');
+assert.equal(easterDate(2027), '2027-03-28');
+assert.equal(easterDate(2024), '2024-03-31');
+const dates = holidaysForYear(2026);
+assert.equal(dates.filter(h => h.kind === 'nacional').length, 9);
+assert.equal(dates.find(h => h.name === 'Sexta-feira da Paixão')?.date, '2026-04-03');
+assert.equal(dates.find(h => h.name === 'Corpus Christi')?.date, '2026-06-04');
+assert.equal(dates.find(h => h.name === 'Carnaval (terça-feira)')?.date, '2026-02-17');
+assert.equal(holidaysForYear(2023).some(h => h.date === '2023-11-20'), false);
+assert.deepEqual(holidaysBetween('2026-12-25', '2027-01-01').map(h => h.date), ['2026-12-25', '2027-01-01']);
+assert.throws(() => holidaysBetween('2026-02-30', '2026-03-01'));
+assert.throws(() => holidaysBetween('2027-01-01', '2026-01-01'));
+assert.equal(holidaySummaryDates('2026-10-12').today[0].name, 'Nossa Senhora Aparecida');
+assert.equal(holidaySummaryDates('2026-12-31').next?.date, '2027-01-01');
+assert.equal(holidaySummaryDates('2026-03-30').week[0].date, '2026-04-03');
+assert.equal(brazilToday(new Date('2026-10-13T01:30:00Z')), '2026-10-12');
+assert.equal(holidayNoticeCandidates('2026-10-04').length, 0);
+assert.equal(holidayNoticeCandidates('2026-10-05')[0].date, '2026-10-12');
+assert.equal(holidayNoticeCandidates('2026-10-12')[0].sourceKey, 'holiday:2026-10-12:today');
+assert.equal(holidayNoticeCandidates('2026-10-13').length, 0);
+assert.equal(holidayNoticeCandidates('2026-06-04').length, 0);
+assert.equal(dayType({ id: 1, status: 'ativo', work_regime: 'CLT', work_schedule_type: '6x1' }, '2026-10-12'), 'trabalho');
+const holiday = dates.find(h => h.date === '2026-10-12')!;
+assert.match(renderToStaticMarkup(createElement(HolidayLabel, { holiday })), /Nossa Senhora Aparecida/);
+const markup = renderToStaticMarkup(createElement(WeekCalendarCard, { holidays: [holiday], weekDays: [{ dateStr: holiday.date, label: '12/10', dayName: 'Seg', isToday: true }], weekGrid: [], onSelectEmployeeDay: () => {}, onNavigateToSchedule: () => {} }));
+assert.match(markup, /bg-violet-50/);
+assert.match(markup, /Feriado nacional/);
+
+await runMigrations();
+await runSeed();
+const manager: AuthenticatedUser = { id: 2, name: 'Gestor', email: '', role: 'MANAGER', active: 1, departments: [], departmentIds: [1] };
+const other = { ...manager, id: 3, departmentIds: [2] };
+const noScope = { ...manager, departmentIds: [] };
+const admin = { ...manager, id: 1, role: 'ADMIN' as const };
+const summary = await holidaySummaryFor(manager, '2026-10-12');
+const employees = await db.prepare("SELECT * FROM employees WHERE department_id=1 AND status<>'inativo'").all() as any[];
+const coverage = summary.today[0];
+assert.equal(coverage.working + coverage.off + coverage.unavailable + coverage.undefined, employees.length);
+assert.equal((await holidaySummaryFor(noScope, '2026-10-12')).today[0].working, 0);
+await db.prepare("UPDATE employees SET status='ativo' WHERE department_id=1").run();
+await db.prepare("INSERT INTO days_off(employee_id,date,type,status) VALUES (?,'2026-10-12','dsr','confirmada') ON CONFLICT(employee_id,date) DO UPDATE SET type='dsr',status='confirmada'").run(employees[0].id);
+const changed = await holidaySummaryFor(manager, '2026-10-12');
+assert.ok(changed.today[0].off >= 1);
+assert.ok((await holidaySummaryFor(admin, '2026-10-12')).today[0].working >= changed.today[0].working);
+const upcoming = (await notificationsFor(manager, '2026-10-05')).find(n => n.source_key === 'holiday:2026-10-12:upcoming');
+assert.ok(upcoming);
+await notificationsFor(manager, '2026-10-06');
+const count = await db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE source_key=?').get(upcoming.source_key) as any;
+assert.equal(count.total, 1);
+await db.prepare('INSERT INTO notification_reads(notification_id,user_id) VALUES (?,?)').run(upcoming.id, manager.id);
+assert.equal((await notificationsFor(manager, '2026-10-06')).find(n => n.id === upcoming.id)?.is_read, 1);
+assert.equal((await notificationsFor(other, '2026-10-06')).find(n => n.id === upcoming.id)?.is_read, 0);
+assert.equal((await notificationsFor(noScope, '2026-10-06')).some(n => n.source_key?.startsWith('holiday:')), false);
+const today = (await notificationsFor(manager, '2026-10-12')).find(n => n.source_key === 'holiday:2026-10-12:today');
+assert.equal(today.is_read, 0);
+assert.equal((await notificationsFor(manager, '2026-10-13')).some(n => n.source_key?.includes('2026-10-12')), false);
+
+const server = http.createServer(app);
+await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+const port = (server.address() as { port: number }).port;
+const base = `http://127.0.0.1:${port}/api`;
+async function request(path: string, token?: string, body?: object) {
+  return fetch(base + path, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000) });
+}
+try {
+  assert.equal((await request('/holidays?startDate=2026-01-01&endDate=2026-12-31')).status, 401);
+  const login = await request('/auth/login', undefined, { email: 'cozinha@folgamanager.local', password: 'CozinhaPassword123!' });
+  const { token } = await login.json() as any;
+  assert.ok(token);
+  const response = await request('/holidays/summary?date=2026-10-12', token);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as any).today[0].name, holiday.name);
+  assert.equal((await request('/holidays?startDate=2026-02-30&endDate=2026-12-31', token)).status, 400);
+  assert.equal((await request('/holidays?startDate=2026-01-01&endDate=2030-12-31', token)).status, 400);
+  assert.equal((await request('/holidays/summary?date=bad', token)).status, 400);
+  const list = await request('/holidays?startDate=2026-10-01&endDate=2026-10-31', token);
+  assert.equal((await list.json() as any[]).length, 1);
+  console.log('Feriados: datas, fuso, componentes, cobertura, notificações e API aprovados.');
+} finally {
+  await new Promise<void>(resolve => server.close(() => resolve()));
+}
+process.exit(0);

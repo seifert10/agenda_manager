@@ -14,5 +14,6 @@ backups/
 .vscode/
 .idea/
 coverage/
+.tmp-company-pg/
 deploy-package/
 deploy-package.zip

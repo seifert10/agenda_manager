@@ -1,5 +1,6 @@
 import db, {dialect} from './connection';
 import { runMigrations } from './migrate';
+import { assertLegacyRuntime } from './company-cutover-guard';
 import { generateFakeValidCPF } from '../utils/cpf';
 import { hashPassword } from '../utils/auth';
 function formatDate(d: Date): string {
@@ -19,6 +20,7 @@ export async function runSeed() {
     console.log('🌱 Populando banco SQLite com dados fictícios para demonstração...');
     // Garante que tabelas existam
     await runMigrations();
+    await assertLegacyRuntime();
     // Limpa dados anteriores para garantir seed limpo
     await db.exec(`
     DELETE FROM user_sessions;

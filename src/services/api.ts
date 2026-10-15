@@ -4,64 +4,50 @@ export interface OffSaveResult {id?: number; message:string; warning?:string; in
 
 const API_BASE = '/api';
 
-export function getStoredToken(): string | null {
-  return localStorage.getItem('folga_manager_token');
-}
+import { sessionRequest, getSession, setStoredToken } from './session';
+export { getStoredToken, setStoredToken } from './session';
 
-export function setStoredToken(token: string | null) {
-  if (token) {
-    localStorage.setItem('folga_manager_token', token);
-  } else {
-    localStorage.removeItem('folga_manager_token');
-  }
-}
-
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers as Record<string, string>),
-  };
-
-  const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
-
-  if (!res.ok) {
-    let errorMsg = `Erro ${res.status}: ${res.statusText}`;
-    try {
-      const errData = await res.json();
-      if (errData.error) errorMsg = errData.error;
-    } catch {
-      // Ignora erro de parse
+async function authorizedResult<T>(endpoint: string, options: RequestInit, parse: (response: Response) => Promise<T>): Promise<T> {
+  const auth = endpoint.startsWith('/auth/');
+  const session = sessionRequest(auth);
+  try {
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options, signal: session.signal,
+      headers: { 'Content-Type': 'application/json', ...(session.token && endpoint !== '/auth/login' ? { Authorization: `Bearer ${session.token}` } : {}), ...options.headers },
+    });
+    session.assertCurrent();
+    if (!res.ok) {
+      let message = `Erro ${res.status}: ${res.statusText}`;
+      try { const data = await res.json(); if (data.error) message = data.error; } catch { /* Empty error response. */ }
+      session.assertCurrent();
+      if (res.status === 401 && endpoint !== '/auth/login') session.unauthorized();
+      throw new Error(message);
     }
-
-    if (res.status === 401) {
-      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
-    }
-
-    throw new Error(errorMsg);
-  }
-
-  return res.json();
+    const result = await parse(res);
+    session.assertCurrent();
+    return result;
+  } finally { session.finish(); }
+}
+function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  return authorizedResult(endpoint, options, res => res.json());
 }
 
+import type { Holiday, HolidaySummary } from '../../shared/holidays';
 export const api = {
+  getHolidays: (startDate: string, endDate: string): Promise<Holiday[]> =>
+    request(`/holidays?${new URLSearchParams({ startDate, endDate })}`),
+  getHolidaySummary: (): Promise<HolidaySummary> => request('/holidays/summary'),
   // Autenticação
-  login: (email: string, password: string): Promise<AuthResponse> =>
+  login: (companyCode: string, email: string, password: string): Promise<AuthResponse> =>
     request<AuthResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ companyCode, email, password }),
     }),
 
-  logout: async (): Promise<{ message: string }> => {
-    try {
-      return await request<{ message: string }>('/auth/logout', { method: 'POST' });
-    } finally {
-      setStoredToken(null);
-    }
+  logout: async (): Promise<void> => {
+    const token = getSession().token;
+    setStoredToken(null);
+    if (token) await fetch(`${API_BASE}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
   },
 
   getMe: (): Promise<{ user: User }> =>
@@ -218,23 +204,7 @@ export const api = {
     if (startDate) query.set('startDate', startDate);
     if (endDate) query.set('endDate', endDate);
 
-    const token = getStoredToken();
-    const res = await fetch(`${API_BASE}/reports/export-csv?${query.toString()}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    if (!res.ok) {
-      let errText = `Erro ${res.status}`;
-      try {
-        const json = await res.json();
-        if (json.error) errText = json.error;
-      } catch {
-        // Ignora
-      }
-      throw new Error(errText);
-    }
-
-    const blob = await res.blob();
+    const blob = await authorizedResult(`/reports/export-csv?${query.toString()}`, {}, res => res.blob());
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

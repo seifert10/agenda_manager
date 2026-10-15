@@ -5,6 +5,7 @@ import TrafficLights from '../components/ui/TrafficLights';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
+  const [companyCode, setCompanyCode] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -12,8 +13,8 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      setErrorMessage('Por favor, informe seu e-mail e sua senha de acesso.');
+    if (!companyCode || !email || !password) {
+      setErrorMessage('Por favor, informe o código da empresa, seu e-mail e sua senha de acesso.');
       return;
     }
 
@@ -21,7 +22,7 @@ export const LoginPage: React.FC = () => {
     setErrorMessage(null);
 
     try {
-      await login(email, password);
+      await login(companyCode, email, password);
     } catch (err: any) {
       setErrorMessage(err.message || 'Falha ao autenticar. Verifique seus dados.');
     } finally {
@@ -32,8 +33,8 @@ export const LoginPage: React.FC = () => {
   const testAccounts = import.meta.env.DEV ? [
     {
       role: 'ADMIN',
-      title: 'Administrador Geral',
-      subtitle: 'Acesso Global a Todos os Setores',
+      title: 'Administrador da Empresa',
+      subtitle: 'Empresa demo — Todos os Setores',
       email: 'admin@folgamanager.local',
       password: 'AdminPassword123!',
       badgeColor: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 border-purple-200 dark:border-purple-800'
@@ -73,6 +74,7 @@ export const LoginPage: React.FC = () => {
   ] : [];
 
   const fillCredentials = (acc: typeof testAccounts[0]) => {
+    setCompanyCode('demo');
     setEmail(acc.email);
     setPassword(acc.password);
     setErrorMessage(null);
@@ -114,7 +116,7 @@ export const LoginPage: React.FC = () => {
                 Acesse seu painel
               </h2>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                {import.meta.env.DEV ? 'Entre com suas credenciais ou selecione uma conta de demonstração.' : 'Entre com seu e-mail corporativo e sua senha de acesso.'}
+                {import.meta.env.DEV ? 'Entre com suas credenciais ou selecione uma conta de demonstração.' : 'Entre com o código da empresa, seu e-mail corporativo e sua senha de acesso.'}
               </p>
             </div>
 
@@ -127,13 +129,17 @@ export const LoginPage: React.FC = () => {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
+                <label htmlFor="company-code" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">Código da empresa</label>
+                <input id="company-code" value={companyCode} onChange={e => setCompanyCode(e.target.value.toLowerCase())} required minLength={3} maxLength={64} pattern="[a-z0-9]+(-[a-z0-9]+)*" autoCapitalize="none" autoComplete="organization" placeholder="ex: minha-empresa" className="w-full px-4 py-2.5 text-sm rounded-xl bg-zinc-50/80 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 focus:outline-none focus:ring-2 focus:ring-mac-blue text-zinc-900 dark:text-zinc-100" />
+              </div>
+              <div>
+                <label htmlFor="login-email" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
                   E-mail corporativo
                 </label>
                 <div className="relative">
                   <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
-                    type="email"
+                    id="login-email" autoComplete="username" type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="ex: admin@folgamanager.local"
@@ -144,13 +150,13 @@ export const LoginPage: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
+                <label htmlFor="login-password" className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">
                   Senha
                 </label>
                 <div className="relative">
                   <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
-                    type="password"
+                    id="login-password" autoComplete="current-password" type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••••••"
